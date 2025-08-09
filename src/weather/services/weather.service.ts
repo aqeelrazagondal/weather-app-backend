@@ -1,184 +1,274 @@
-import { Injectable, HttpException, HttpStatus, Inject } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import axios, { AxiosError } from 'axios';
-import { WeatherTransformerService } from './weather-transformer.service';
+import { ConfigService } from '@nestjs/config';
 import { RateLimiterService } from '../../shared/services/rate-limiter.service';
+import { WeatherTransformer } from '../utils/weather-transformer';
+import {
+  Granularity,
+  Units,
+  WindForecastQueryDto,
+} from '../dto/wind-forecast.dto';
+import {
+  WeatherForecastPoint,
+  WeatherDailySummary,
+  WindForecastResult,
+} from '../types/forecast.types';
+import { CacheSwrService } from '../../shared/cache/cache-swr.service';
 
-interface OpenWeatherResponse {
+type OwmForecastListItem = {
+  dt: number;
   main: { temp: number };
-  wind: { speed: number; deg: number };
-}
-interface OpenWeatherForecastResponse {
-  list: Array<{
-    dt: number;
-    main: { temp: number };
-    wind: { speed: number; deg: number };
-  }>;
-}
-interface OpenWeatherErrorResponse {
-  message?: string;
-}
-interface WeatherData {
-  temperature: number;
+  wind: { speed: number; deg: number; gust?: number };
+};
+
+type OwmForecastResponse = {
+  cod: string;
+  list: OwmForecastListItem[];
+};
+
+type OwmCurrentResponse = {
+  dt: number;
+  wind: { speed: number; deg: number; gust?: number };
+  main?: { temp?: number };
+};
+
+export type WeatherSummary = {
   windSpeed: number;
-  windDirection: string;
-}
-interface WeatherForecastData {
-  temperature: number;
-  windSpeed: number;
-  windDirection: string;
+  windDeg: number;
+  windGust?: number;
   timestamp: number;
-}
-interface ForecastData {
-  hourly: WeatherForecastData[];
-  daily: { date: string; avgWindSpeed: number; predominantDirection: string }[];
-}
+  units: Units;
+};
 
 @Injectable()
 export class WeatherService {
-  private readonly apiUrl: string;
+  private readonly apiBase: string;
   private readonly apiKey: string;
-  private readonly CACHE_TTL = 1800; // 30 minutes
+  private readonly transformer = new WeatherTransformer();
   private readonly OWM_LIMIT_PER_HOUR = 2000;
 
+  // TTLs
+  private readonly CURRENT_FRESH_SEC = 180; // 3 minutes
+  private readonly CURRENT_STALE_SEC = 300; // 5 minutes
+  private readonly FORECAST_FRESH_SEC = 10 * 60; // 10 minutes
+  private readonly FORECAST_STALE_SEC = 15 * 60; // 15 minutes
+
   constructor(
-    private readonly configService: ConfigService,
-    private readonly weatherTransformer: WeatherTransformerService,
-    private readonly rateLimiterService: RateLimiterService,
-    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly config: ConfigService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
+    private readonly rateLimiter: RateLimiterService,
+    private readonly swr: CacheSwrService,
   ) {
-    this.apiKey = this.configService.getOrThrow<string>('OPENWEATHER_API_KEY');
-    this.apiUrl = this.configService.getOrThrow<string>('OPENWEATHER_API_URL');
+    this.apiBase =
+      this.config.get<string>('OPENWEATHER_API_URL') ??
+      'https://api.openweathermap.org/data/2.5';
+    this.apiKey = this.config.getOrThrow<string>('OPENWEATHER_API_KEY');
   }
 
-  async getCurrentWeather(lat: number, lon: number): Promise<WeatherData> {
-    const cacheKey = `weather:${lat}:${lon}`;
-    const cached = await this.cacheManager.get<WeatherData>(cacheKey);
-    if (cached) return cached;
-
-    // Throttle before outbound request (fixed 1-hour window)
-    await this.rateLimiterService.consume(
-      'owm:requests',
-      this.OWM_LIMIT_PER_HOUR,
-      3600,
+  // Current weather summary with SWR and request de-duplication
+  async getCurrentSummary(
+    lat: number,
+    lon: number,
+    units: Units = Units.Metric,
+    clientKey?: string,
+  ): Promise<WeatherSummary> {
+    const key = this.keyCurrent(lat, lon, units);
+    return this.swr.getOrRevalidate<WeatherSummary>(
+      key,
+      this.CURRENT_FRESH_SEC,
+      this.CURRENT_STALE_SEC,
+      () => this.fetchCurrent(lat, lon, units, clientKey),
     );
+  }
+
+  private async fetchCurrent(
+    lat: number,
+    lon: number,
+    units: Units,
+    clientKey?: string,
+  ): Promise<WeatherSummary> {
+    // Rate limit: global + optional per-client burst window
+    await this.rateLimiter.consumeMulti([
+      { key: 'owm:requests:1m', limit: 120, windowSec: 60 }, // burst control
+      { key: 'owm:requests:1h', limit: this.OWM_LIMIT_PER_HOUR, windowSec: 3600 },
+      ...(clientKey
+        ? [
+            {
+              key: `client:${clientKey}:1m`,
+              limit: 120,
+              windowSec: 60,
+            },
+          ]
+        : []),
+    ]);
 
     try {
-      const { data } = await this.makeApiRequest<OpenWeatherResponse>(
-        '/weather',
-        { lat, lon },
+      const { data, status } = await axios.get<OwmCurrentResponse>(
+        `${this.apiBase}/weather`,
+        {
+          params: { lat, lon, units, appid: this.apiKey },
+          timeout: 5000,
+          validateStatus: (s) => s >= 200 && s < 500,
+        },
       );
-
-      if (!this.isValidWeatherResponse(data)) {
-        throw new Error('Invalid weather data format');
+      if (status >= 400) {
+        throw new HttpException(
+          'Upstream current weather error',
+          status === 429 ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.BAD_REQUEST,
+        );
       }
-
-      const weather = this.weatherTransformer.transformWeatherData({
-        temp: data.main.temp,
-        speed: data.wind.speed,
-        deg: data.wind.deg,
-      });
-
-      await this.cacheManager.set(cacheKey, weather, this.CACHE_TTL);
-      return weather;
-    } catch (error) {
-      this.handleApiError(error);
+      const summary: WeatherSummary = {
+        windSpeed: data.wind?.speed ?? 0,
+        windDeg: data.wind?.deg ?? 0,
+        windGust: data.wind?.gust,
+        timestamp: data.dt,
+        units,
+      };
+      return summary;
+    } catch (err) {
+      this.handleApiError(err);
     }
   }
 
-  async getForecast(lat: number, lon: number, days = 5): Promise<ForecastData> {
-    const cacheKey = `forecast:${lat}:${lon}:${days}`;
-    const cached = await this.cacheManager.get<ForecastData>(cacheKey);
-    if (cached) return cached;
+  async getWindForecast(
+    lat: number,
+    lon: number,
+    query: WindForecastQueryDto,
+    clientKey?: string,
+  ): Promise<WindForecastResult> {
+    const { granularity, units } = query;
+    const rangeHours =
+      granularity === Granularity.Hourly ? (query.range ?? 24) : undefined;
+    const rangeDays =
+      granularity === Granularity.Daily ? (query.days ?? 5) : undefined;
 
-    // Throttle before outbound request
-    await this.rateLimiterService.consume(
-      'owm:requests',
-      this.OWM_LIMIT_PER_HOUR,
-      3600,
+    const cacheKey = this.keyForecast(lat, lon, units, granularity, rangeHours, rangeDays);
+
+    return this.swr.getOrRevalidate<WindForecastResult>(
+      cacheKey,
+      this.FORECAST_FRESH_SEC,
+      this.FORECAST_STALE_SEC,
+      () => this.fetchForecast(lat, lon, query, clientKey),
     );
+  }
+
+  private async fetchForecast(
+    lat: number,
+    lon: number,
+    query: WindForecastQueryDto,
+    clientKey?: string,
+  ): Promise<WindForecastResult> {
+    const { granularity, units } = query;
+
+    // Rate limit: global + optional per-client burst window
+    await this.rateLimiter.consumeMulti([
+      { key: 'owm:requests:1m', limit: 120, windowSec: 60 },
+      { key: 'owm:requests:1h', limit: this.OWM_LIMIT_PER_HOUR, windowSec: 3600 },
+      ...(clientKey
+        ? [
+            {
+              key: `client:${clientKey}:1m`,
+              limit: 120,
+              windowSec: 60,
+            },
+          ]
+        : []),
+    ]);
+
+    const cnt =
+      granularity === Granularity.Hourly
+        ? Math.min(Math.ceil((query.range ?? 24) / 3), 40)
+        : Math.min((query.days ?? 5) * 8, 40);
 
     try {
-      const { data } = await this.makeApiRequest<OpenWeatherForecastResponse>(
-        '/forecast',
+      const { data, status } = await axios.get<OwmForecastResponse>(
+        `${this.apiBase}/forecast`,
         {
-          lat,
-          lon,
-          cnt: days * 8,
+          params: { lat, lon, units, cnt, appid: this.apiKey },
+          timeout: 5000,
+          validateStatus: (s) => s >= 200 && s < 500,
         },
       );
 
-      if (!this.isValidForecastResponse(data)) {
-        throw new Error('Invalid forecast data format');
+      if (status >= 400) {
+        throw new HttpException(
+          'Upstream forecast error',
+          status === 429 ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.BAD_REQUEST,
+        );
+      }
+      if (!data?.list?.length) {
+        throw new HttpException('Invalid forecast data', HttpStatus.BAD_REQUEST);
       }
 
-      const hourlyData: WeatherForecastData[] = data.list.map((item) => ({
-        temperature: item.main.temp,
-        windSpeed: item.wind.speed,
-        windDirection: this.weatherTransformer.getWindDirection(item.wind.deg),
+      const points: WeatherForecastPoint[] = data.list.map((item) => ({
+        temperature: item.main?.temp,
+        windSpeed: item.wind?.speed,
+        windGust: item.wind?.gust,
+        windDirectionDeg: item.wind?.deg,
+        windDirection: this.transformer.getWindDirection(item.wind?.deg),
         timestamp: item.dt,
       }));
 
-      const forecast: ForecastData = {
-        hourly: hourlyData,
-        daily: this.weatherTransformer.calculateDailyAverages(hourlyData),
-      };
-
-      await this.cacheManager.set(cacheKey, forecast, this.CACHE_TTL);
-      return forecast;
-    } catch (error) {
-      this.handleApiError(error);
+      if (granularity === Granularity.Hourly) {
+        const steps = Math.min(points.length, Math.ceil((query.range ?? 24) / 3));
+        return {
+          units,
+          granularity,
+          hourly: points.slice(0, steps),
+        };
+      } else {
+        const daily: WeatherDailySummary[] =
+          this.transformer.calculateDailyAverages(points);
+        const maxDays = Math.min(daily.length, query.days ?? 5);
+        return {
+          units,
+          granularity,
+          daily: daily.slice(0, maxDays),
+        };
+      }
+    } catch (err) {
+      this.handleApiError(err);
     }
   }
 
-  private async makeApiRequest<T>(
-    endpoint: string,
-    params: Record<string, unknown>,
-  ): Promise<{ data: T }> {
-    return axios.get<T>(`${this.apiUrl}${endpoint}`, {
-      params: {
-        ...params,
-        appid: this.apiKey,
-        units: 'metric',
-      },
-    });
+  private keyCurrent(lat: number, lon: number, units: Units): string {
+    const r = (n: number) => Math.round(n * 1000) / 1000;
+    return `weather:current:${r(lat)}:${r(lon)}:${units}`;
   }
 
-  private isValidWeatherResponse(data: unknown): data is OpenWeatherResponse {
-    return (
-      data !== null &&
-      typeof data === 'object' &&
-      'main' in data &&
-      'wind' in data &&
-      typeof (data as OpenWeatherResponse).main?.temp === 'number' &&
-      typeof (data as OpenWeatherResponse).wind?.speed === 'number' &&
-      typeof (data as OpenWeatherResponse).wind?.deg === 'number'
-    );
-  }
-
-  private isValidForecastResponse(
-    data: unknown,
-  ): data is OpenWeatherForecastResponse {
-    return (
-      data !== null &&
-      typeof data === 'object' &&
-      'list' in data &&
-      Array.isArray((data as OpenWeatherForecastResponse).list)
-    );
+  private keyForecast(
+    lat: number,
+    lon: number,
+    units: Units,
+    granularity: Granularity,
+    rangeHours?: number,
+    rangeDays?: number,
+  ): string {
+    const r = (n: number) => Math.round(n * 1000) / 1000;
+    return `weather:forecast:${r(lat)}:${r(lon)}:${granularity}:${units}:${rangeHours ?? ''}:${rangeDays ?? ''}`;
   }
 
   private handleApiError(error: unknown): never {
     if (axios.isAxiosError(error)) {
-      const axiosError = error as AxiosError<OpenWeatherErrorResponse>;
+      const e = error as AxiosError;
+      if (e.response?.status === 429) {
+        throw new HttpException(
+          'Rate limit exceeded. Please try again later.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
       throw new HttpException(
-        axiosError.response?.data?.message ?? 'Failed to fetch weather data',
-        axiosError.response?.status ?? HttpStatus.BAD_REQUEST,
+        'Failed to fetch data from weather provider',
+        HttpStatus.BAD_REQUEST,
       );
     }
+    if (error instanceof HttpException) {
+      throw error;
+    }
     throw new HttpException(
-      error instanceof Error ? error.message : 'Internal server error',
+      'Internal server error',
       HttpStatus.INTERNAL_SERVER_ERROR,
     );
   }

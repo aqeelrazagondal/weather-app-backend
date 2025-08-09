@@ -1,96 +1,88 @@
-import { Controller, Get, Query, ValidationPipe } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Param,
+  Query,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
+import {
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { WeatherService } from '../services/weather.service';
-import { WeatherQueryDto } from '../dto/weather-query.dto';
-import { ForecastData, WeatherData } from '../../shared/types/weather.types';
+import {
+  Granularity,
+  Units,
+  WindForecastParamsDto,
+  WindForecastQueryDto,
+} from '../dto/wind-forecast.dto';
+import { WindForecastResult } from '../types/forecast.types';
 
 @ApiTags('weather')
-@Controller('weather')
+@Controller({ path: 'weather', version: '1' })
 export class WeatherController {
   constructor(private readonly weatherService: WeatherService) {}
 
-  @Get('current')
+  @Get(':lat,:lon/forecast')
   @ApiOperation({
-    summary: 'Get current weather',
+    summary: 'Wind forecast',
     description:
-      'Retrieve current weather data (temperature, wind) for the given coordinates.',
+      'Retrieve wind forecast (speed, gust, direction) by coordinates with configurable units, granularity, and range.',
   })
-  @ApiQuery({
+  @ApiParam({
     name: 'lat',
-    description: 'Latitude',
+    description: 'Latitude (-90..90)',
     example: 51.5074,
-    type: Number,
+  })
+  @ApiParam({
+    name: 'lon',
+    description: 'Longitude (-180..180)',
+    example: -0.1278,
   })
   @ApiQuery({
-    name: 'lon',
-    description: 'Longitude',
-    example: -0.1278,
-    type: Number,
+    name: 'units',
+    enum: Units,
+    required: false,
+    example: Units.Metric,
   })
-  @ApiResponse({
-    status: 200,
-    description: 'Current weather data retrieved successfully',
-    schema: {
-      example: {
-        temperature: 22.5,
-        windSpeed: 5.2,
-        windDirection: 'NE',
-      },
-    },
+  @ApiQuery({
+    name: 'granularity',
+    enum: Granularity,
+    required: false,
+    example: Granularity.Hourly,
   })
-  @ApiResponse({
-    status: 400,
-    description: 'Invalid coordinates or upstream API error',
-  })
-  getCurrentWeather(
-    @Query(ValidationPipe) query: WeatherQueryDto,
-  ): Promise<WeatherData> {
-    return this.weatherService.getCurrentWeather(query.lat, query.lon);
-  }
-
-  @Get('forecast')
-  @ApiOperation({
-    summary: 'Get weather forecast',
+  @ApiQuery({
+    name: 'range',
+    required: false,
     description:
-      'Retrieve 5-day/3-hour forecast for the given coordinates. Returns hourly data with daily wind summaries.',
-  })
-  @ApiQuery({
-    name: 'lat',
-    description: 'Latitude',
-    example: 51.5074,
-    type: Number,
-  })
-  @ApiQuery({
-    name: 'lon',
-    description: 'Longitude',
-    example: -0.1278,
-    type: Number,
+      'When granularity=hourly, number of hours (3h steps, max 120). Example: 24',
+    example: 24,
   })
   @ApiQuery({
     name: 'days',
-    description: 'Number of days to include in the forecast (default 5)',
-    example: 5,
     required: false,
-    type: Number,
+    description: 'When granularity=daily, number of days (max 7). Example: 5',
+    example: 5,
   })
   @ApiResponse({
     status: 200,
     description: 'Forecast data retrieved successfully',
     schema: {
       example: {
+        units: 'metric',
+        granularity: 'hourly',
         hourly: [
           {
             temperature: 22.5,
             windSpeed: 5.2,
+            windGust: 7.1,
+            windDirectionDeg: 45,
             windDirection: 'NE',
-            timestamp: 1628156400,
-          },
-        ],
-        daily: [
-          {
-            date: '2025-08-07',
-            avgWindSpeed: 4.8,
-            predominantDirection: 'NE',
+            timestamp: 1723206000,
           },
         ],
       },
@@ -100,9 +92,11 @@ export class WeatherController {
     status: 400,
     description: 'Invalid coordinates or upstream API error',
   })
-  getForecast(
-    @Query(ValidationPipe) query: WeatherQueryDto,
-  ): Promise<ForecastData> {
-    return this.weatherService.getForecast(query.lat, query.lon, query.days);
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async getWindForecast(
+    @Param() params: WindForecastParamsDto,
+    @Query() query: WindForecastQueryDto,
+  ): Promise<WindForecastResult> {
+    return this.weatherService.getWindForecast(params.lat, params.lon, query);
   }
 }

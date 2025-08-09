@@ -39,18 +39,28 @@ export class OpenWeatherService {
     this.apiUrl = apiUrl;
   }
 
-  async getWeatherByCoordinates(lat: number, lon: number): Promise<WeatherData> {
+  async getWeatherByCoordinates(
+    lat: number,
+    lon: number,
+  ): Promise<WeatherData> {
     const cacheKey = `weather_${lat}_${lon}`;
     const cachedData = await this.cacheManager.get<WeatherData>(cacheKey);
     if (cachedData) return cachedData;
 
     // Throttle before outbound request
-    await this.rateLimiter.consume('owm:requests', this.OWM_LIMIT_PER_HOUR, 3600);
+    await this.rateLimiter.consume(
+      'owm:requests',
+      this.OWM_LIMIT_PER_HOUR,
+      3600,
+    );
 
     try {
-      const response = await axios.get<OpenWeatherResponse>(`${this.apiUrl}/weather`, {
-        params: { lat, lon, appid: this.apiKey, units: 'metric' },
-      });
+      const response = await axios.get<OpenWeatherResponse>(
+        `${this.apiUrl}/weather`,
+        {
+          params: { lat, lon, appid: this.apiKey, units: 'metric' },
+        },
+      );
       const weatherData: WeatherData = {
         temperature: response.data.main.temp,
         windSpeed: response.data.wind.speed,
@@ -59,7 +69,10 @@ export class OpenWeatherService {
       await this.cacheManager.set(cacheKey, weatherData, 1800);
       return weatherData;
     } catch (e) {
-      throw new HttpException('Failed to fetch weather data', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'Failed to fetch weather data',
+        HttpStatus.BAD_REQUEST,
+      );
     }
   }
 

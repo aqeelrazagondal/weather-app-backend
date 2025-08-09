@@ -1,25 +1,22 @@
 import { Module } from '@nestjs/common';
-import { CacheModule } from '@nestjs/cache-manager';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Locations } from './entites/location.entity';
-import { LocationsController } from './locations.controller';
+import { CacheModule } from '@nestjs/cache-manager';
 import { LocationsService } from './locations.service';
-import { OpenWeatherService } from '../services/openweather.service';
-import { RateLimiterService } from '../shared/services/rate-limiter.service';
+import { LocationsController } from './locations.controller';
+import { WeatherModule } from '../weather/weather.module';
+import { Locations } from './entites/location.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Locations]),
     CacheModule.register({
-      ttl: 1800, // 30 minutes
+      ttl: 1800, // 30 minutes (module-local cache, optional if global Redis cache is used)
       max: 100,
     }),
+    WeatherModule, // <-- Import module that exports WeatherService
   ],
   controllers: [LocationsController],
-  providers: [
-    LocationsService,
-    OpenWeatherService,
-    RateLimiterService, // <-- provide RateLimiterService so OpenWeatherService can be constructed
-  ],
+  providers: [LocationsService],
+  exports: [LocationsService],
 })
 export class LocationsModule {}

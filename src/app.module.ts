@@ -9,6 +9,7 @@ import { LocationsModule } from './locations/locations.module';
 import { WeatherModule } from './weather/weather.module';
 import { LocationSearchModule } from './location-search/location-search.module';
 import { HealthModule } from './health/health.module';
+import { CacheRedisModule } from './config/cache.redis.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { HealthModule } from './health/health.module';
       validate,
       envFilePath: '.env',
     }),
+    CacheRedisModule,
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

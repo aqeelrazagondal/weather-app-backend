@@ -7,13 +7,25 @@ import {
   HttpCode,
   Headers,
   BadRequestException,
+  Param,
+  Patch,
+  Query,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiHeader } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiHeader,
+  ApiParam,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { LocationsService } from './locations.service';
 import { CreateLocationDto } from './dto/create-location.dto';
-import { LocationSearchResponseDto } from '../location-search/dto/location-search.dto';
+import { UpdateLocationDto } from './dto/update-location.dto';
+import { PaginationDto } from './dto/pagination.dto';
+import { Units } from '../weather/dto/wind-forecast.dto';
+import { WeatherSummary } from '../weather/services/weather.service';
 import { Locations } from './entites/location.entity';
-import { WeatherData } from '../shared/types/weather.types';
 
 function assertUuidV4(value: string | undefined): asserts value is string {
   if (!value) {
@@ -27,26 +39,19 @@ function assertUuidV4(value: string | undefined): asserts value is string {
 }
 
 @ApiTags('locations')
-@Controller('locations')
+@Controller({ path: 'locations', version: '1' })
 export class LocationsController {
   constructor(private readonly locationsService: LocationsService) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Add favorite location',
-    description: 'Add a new location to favorites for the provided client',
-  })
+  @ApiOperation({ summary: 'Add favorite location' })
   @ApiHeader({
     name: 'X-Client-Id',
     description: 'Anonymous client UUID used to scope favorites',
     required: true,
-    example: 'b3a0f4f1-6b0b-4a0a-9f8b-11d0a1b2c3d4',
+    example: '00000000-0000-4000-8000-000000000000',
   })
-  @ApiResponse({
-    status: 201,
-    description: 'Location added successfully',
-    type: LocationSearchResponseDto,
-  })
+  @ApiResponse({ status: 201, description: 'Location added successfully' })
   create(
     @Body() createLocationDto: CreateLocationDto,
     @Headers('x-client-id') clientId: string | undefined,
@@ -57,46 +62,95 @@ export class LocationsController {
 
   @Get()
   @ApiOperation({
-    summary: 'Get favorite locations',
-    description:
-      'Retrieve all favorite locations for the provided client with current weather',
+    summary: 'Get favorite locations (paginated, minimal weather)',
   })
   @ApiHeader({
     name: 'X-Client-Id',
     description: 'Anonymous client UUID used to scope favorites',
     required: true,
-    example: 'b3a0f4f1-6b0b-4a0a-9f8b-11d0a1b2c3d4',
+    example: '00000000-0000-4000-8000-000000000000',
+  })
+  @ApiQuery({ name: 'page', required: false, example: 1 })
+  @ApiQuery({ name: 'pageSize', required: false, example: 10 })
+  @ApiQuery({
+    name: 'units',
+    required: false,
+    enum: Units,
+    example: Units.Metric,
   })
   @ApiResponse({
     status: 200,
-    description: 'List of favorite locations',
-    type: [LocationSearchResponseDto],
+    description: 'List of favorite locations with minimal weather summary',
   })
   findAll(
     @Headers('x-client-id') clientId: string | undefined,
-  ): Promise<Array<Locations & { weather: WeatherData }>> {
+    @Query() pagination: PaginationDto,
+    @Query('units') units?: Units,
+  ): Promise<{
+    total: number;
+    page: number;
+    pageSize: number;
+    items: Array<Locations & { weather: WeatherSummary }>;
+  }> {
     assertUuidV4(clientId);
-    return this.locationsService.findAll(clientId);
+    return this.locationsService.findAllMinimal(
+      clientId,
+      pagination,
+      (units as Units) ?? Units.Metric,
+    );
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update a favorite location' })
+  @ApiHeader({
+    name: 'X-Client-Id',
+    description: 'Anonymous client UUID used to scope favorites',
+    required: true,
+    example: '00000000-0000-4000-8000-000000000000',
+  })
+  @ApiParam({ name: 'id', example: 1 })
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateLocationDto,
+    @Headers('x-client-id') clientId: string | undefined,
+  ): Promise<Locations> {
+    assertUuidV4(clientId);
+    return this.locationsService.update(Number(id), clientId, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Delete a specific favorite location (soft-delete)',
+  })
+  @ApiHeader({
+    name: 'X-Client-Id',
+    description: 'Anonymous client UUID used to scope favorites',
+    required: true,
+    example: '00000000-0000-4000-8000-000000000000',
+  })
+  @ApiParam({ name: 'id', example: 1 })
+  removeOne(
+    @Param('id') id: string,
+    @Headers('x-client-id') clientId: string | undefined,
+  ): Promise<void> {
+    assertUuidV4(clientId);
+    return this.locationsService.removeOne(Number(id), clientId);
   }
 
   @Delete()
   @HttpCode(204)
-  @ApiOperation({
-    summary: 'Delete locations',
-    description: 'Soft-delete all favorite locations for the provided client',
-  })
+  @ApiOperation({ summary: 'Delete all favorite locations (soft-delete)' })
   @ApiHeader({
     name: 'X-Client-Id',
     description: 'Anonymous client UUID used to scope favorites',
     required: true,
-    example: 'b3a0f4f1-6b0b-4a0a-9f8b-11d0a1b2c3d4',
+    example: '00000000-0000-4000-8000-000000000000',
   })
-  @ApiResponse({ status: 204, description: 'Locations deleted successfully' })
-  @ApiResponse({ status: 404, description: 'Location not found' })
-  remove(
+  removeAll(
     @Headers('x-client-id') clientId: string | undefined,
   ): Promise<void> {
     assertUuidV4(clientId);
-    return this.locationsService.remove(clientId);
+    return this.locationsService.removeAll(clientId);
   }
 }
