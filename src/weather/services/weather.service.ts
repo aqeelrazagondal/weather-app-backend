@@ -49,11 +49,11 @@ export class WeatherService {
   private readonly transformer = new WeatherTransformer();
   private readonly OWM_LIMIT_PER_HOUR = 2000;
 
-  // TTLs
-  private readonly CURRENT_FRESH_SEC = 180; // 3 minutes
-  private readonly CURRENT_STALE_SEC = 300; // 5 minutes
-  private readonly FORECAST_FRESH_SEC = 10 * 60; // 10 minutes
-  private readonly FORECAST_STALE_SEC = 15 * 60; // 15 minutes
+  // TTL policy: short for "current", longer for "forecast" (SWR)
+  private readonly CURRENT_FRESH_SEC = 180; // serve fresh for 3 minutes
+  private readonly CURRENT_STALE_SEC = 300; // allow stale up to 5 minutes
+  private readonly FORECAST_FRESH_SEC = 10 * 60; // serve fresh for 10 minutes
+  private readonly FORECAST_STALE_SEC = 15 * 60; // allow stale up to 15 minutes
 
   constructor(
     private readonly config: ConfigService,
@@ -67,7 +67,7 @@ export class WeatherService {
     this.apiKey = this.config.getOrThrow<string>('OPENWEATHER_API_KEY');
   }
 
-  // Current weather summary with SWR and request de-duplication
+  // Returns minimal current wind summary; heavily cached with SWR.
   async getCurrentSummary(
     lat: number,
     lon: number,
@@ -83,24 +83,22 @@ export class WeatherService {
     );
   }
 
+  // Performs outbound request for "current"; protected by multi-bucket rate limits.
   private async fetchCurrent(
     lat: number,
     lon: number,
     units: Units,
     clientKey?: string,
   ): Promise<WeatherSummary> {
-    // Rate limit: global + optional per-client burst window
     await this.rateLimiter.consumeMulti([
-      { key: 'owm:requests:1m', limit: 120, windowSec: 60 }, // burst control
-      { key: 'owm:requests:1h', limit: this.OWM_LIMIT_PER_HOUR, windowSec: 3600 },
+      { key: 'owm:requests:1m', limit: 120, windowSec: 60 }, // short burst control
+      {
+        key: 'owm:requests:1h',
+        limit: this.OWM_LIMIT_PER_HOUR,
+        windowSec: 3600,
+      },
       ...(clientKey
-        ? [
-            {
-              key: `client:${clientKey}:1m`,
-              limit: 120,
-              windowSec: 60,
-            },
-          ]
+        ? [{ key: `client:${clientKey}:1m`, limit: 120, windowSec: 60 }]
         : []),
     ]);
 
@@ -109,29 +107,31 @@ export class WeatherService {
         `${this.apiBase}/weather`,
         {
           params: { lat, lon, units, appid: this.apiKey },
-          timeout: 5000,
-          validateStatus: (s) => s >= 200 && s < 500,
+          timeout: 5000, // keep upstream budget small
+          validateStatus: (s) => s >= 200 && s < 500, // map 4xx for error shaping
         },
       );
       if (status >= 400) {
         throw new HttpException(
           'Upstream current weather error',
-          status === 429 ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.BAD_REQUEST,
+          status === 429
+            ? HttpStatus.TOO_MANY_REQUESTS
+            : HttpStatus.BAD_REQUEST,
         );
       }
-      const summary: WeatherSummary = {
+      return {
         windSpeed: data.wind?.speed ?? 0,
         windDeg: data.wind?.deg ?? 0,
         windGust: data.wind?.gust,
         timestamp: data.dt,
         units,
       };
-      return summary;
     } catch (err) {
       this.handleApiError(err);
     }
   }
 
+  // Main forecast entry; returns hourly or daily view based on query.granularity.
   async getWindForecast(
     lat: number,
     lon: number,
@@ -144,7 +144,14 @@ export class WeatherService {
     const rangeDays =
       granularity === Granularity.Daily ? (query.days ?? 5) : undefined;
 
-    const cacheKey = this.keyForecast(lat, lon, units, granularity, rangeHours, rangeDays);
+    const cacheKey = this.keyForecast(
+      lat,
+      lon,
+      units,
+      granularity,
+      rangeHours,
+      rangeDays,
+    );
 
     return this.swr.getOrRevalidate<WindForecastResult>(
       cacheKey,
@@ -154,6 +161,7 @@ export class WeatherService {
     );
   }
 
+  // Performs outbound "forecast" call and transforms response to UI-ready shape.
   private async fetchForecast(
     lat: number,
     lon: number,
@@ -162,21 +170,19 @@ export class WeatherService {
   ): Promise<WindForecastResult> {
     const { granularity, units } = query;
 
-    // Rate limit: global + optional per-client burst window
     await this.rateLimiter.consumeMulti([
       { key: 'owm:requests:1m', limit: 120, windowSec: 60 },
-      { key: 'owm:requests:1h', limit: this.OWM_LIMIT_PER_HOUR, windowSec: 3600 },
+      {
+        key: 'owm:requests:1h',
+        limit: this.OWM_LIMIT_PER_HOUR,
+        windowSec: 3600,
+      },
       ...(clientKey
-        ? [
-            {
-              key: `client:${clientKey}:1m`,
-              limit: 120,
-              windowSec: 60,
-            },
-          ]
+        ? [{ key: `client:${clientKey}:1m`, limit: 120, windowSec: 60 }]
         : []),
     ]);
 
+    // OWM 5-day/3-hour API caps at 40 entries; 8 entries ≈ 1 day
     const cnt =
       granularity === Granularity.Hourly
         ? Math.min(Math.ceil((query.range ?? 24) / 3), 40)
@@ -195,11 +201,16 @@ export class WeatherService {
       if (status >= 400) {
         throw new HttpException(
           'Upstream forecast error',
-          status === 429 ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.BAD_REQUEST,
+          status === 429
+            ? HttpStatus.TOO_MANY_REQUESTS
+            : HttpStatus.BAD_REQUEST,
         );
       }
       if (!data?.list?.length) {
-        throw new HttpException('Invalid forecast data', HttpStatus.BAD_REQUEST);
+        throw new HttpException(
+          'Invalid forecast data',
+          HttpStatus.BAD_REQUEST,
+        );
       }
 
       const points: WeatherForecastPoint[] = data.list.map((item) => ({
@@ -212,27 +223,23 @@ export class WeatherService {
       }));
 
       if (granularity === Granularity.Hourly) {
-        const steps = Math.min(points.length, Math.ceil((query.range ?? 24) / 3));
-        return {
-          units,
-          granularity,
-          hourly: points.slice(0, steps),
-        };
-      } else {
-        const daily: WeatherDailySummary[] =
-          this.transformer.calculateDailyAverages(points);
-        const maxDays = Math.min(daily.length, query.days ?? 5);
-        return {
-          units,
-          granularity,
-          daily: daily.slice(0, maxDays),
-        };
+        const steps = Math.min(
+          points.length,
+          Math.ceil((query.range ?? 24) / 3),
+        );
+        return { units, granularity, hourly: points.slice(0, steps) };
       }
+
+      const daily: WeatherDailySummary[] =
+        this.transformer.calculateDailyAverages(points);
+      const maxDays = Math.min(daily.length, query.days ?? 5);
+      return { units, granularity, daily: daily.slice(0, maxDays) };
     } catch (err) {
       this.handleApiError(err);
     }
   }
 
+  // Cache key helpers round coords to 3 decimals to improve hit rate without losing accuracy
   private keyCurrent(lat: number, lon: number, units: Units): string {
     const r = (n: number) => Math.round(n * 1000) / 1000;
     return `weather:current:${r(lat)}:${r(lon)}:${units}`;
@@ -250,6 +257,7 @@ export class WeatherService {
     return `weather:forecast:${r(lat)}:${r(lon)}:${granularity}:${units}:${rangeHours ?? ''}:${rangeDays ?? ''}`;
   }
 
+  // Normalizes provider/transport errors into stable HTTP responses
   private handleApiError(error: unknown): never {
     if (axios.isAxiosError(error)) {
       const e = error as AxiosError;

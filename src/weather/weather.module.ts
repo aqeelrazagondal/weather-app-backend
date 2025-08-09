@@ -8,14 +8,15 @@ import { CacheSwrService } from '../shared/cache/cache-swr.service';
 import { InflightRequestsService } from '../shared/utils/inflight-requests.service';
 
 @Module({
+  // ConfigModule: provides env access; CacheModule: local cache for dev (global Redis may override)
   imports: [ConfigModule, CacheModule.register()],
   controllers: [WeatherController],
   providers: [
-    WeatherService,
-    RateLimiterService,
-    CacheSwrService,
-    InflightRequestsService,
+    WeatherService,           // core weather business logic (SWR, rate limiting)
+    RateLimiterService,       // Redis-first rate limiter with fallback
+    CacheSwrService,          // Stale-While-Revalidate helper
+    InflightRequestsService,  // collapses concurrent identical requests
   ],
-  exports: [WeatherService],
+  exports: [WeatherService],   // exported for other modules (e.g., Locations)
 })
 export class WeatherModule {}

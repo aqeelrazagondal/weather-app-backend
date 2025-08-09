@@ -13,11 +13,12 @@ export enum Granularity {
   Daily = 'daily',
 }
 
-// Helpers to avoid eslint no-base-to-string and ensure robust coercion
+// Helpers: normalize query param shapes and avoid accidental stringification of objects
 function firstParam(value: unknown): unknown {
   return Array.isArray(value) ? value[0] : value;
 }
 
+// Converts enum-like inputs to lowercase strings; uses fallback if input invalid
 function toLowerEnumValue(value: unknown, fallback: string): string {
   const v = firstParam(value);
   if (typeof v === 'string') return v.toLowerCase();
@@ -26,6 +27,7 @@ function toLowerEnumValue(value: unknown, fallback: string): string {
   return fallback.toLowerCase();
 }
 
+// Parses integer or returns undefined (lets service apply defaults)
 function toIntOrUndefined(value: unknown): number | undefined {
   const v = firstParam(value);
   if (typeof v === 'number' && Number.isInteger(v)) return v;
@@ -38,11 +40,11 @@ function toIntOrUndefined(value: unknown): number | undefined {
   return undefined;
 }
 
+// Parses float; NaN will be rejected by @IsNumber/@Min/@Max later
 function toFloat(value: unknown): number {
   const v = firstParam(value);
   if (typeof v === 'number') return v;
   if (typeof v === 'string') return parseFloat(v);
-  // Will be validated by class-validator; NaN will fail @IsNumber range checks gracefully
   return NaN as unknown as number;
 }
 
@@ -90,6 +92,7 @@ export class WindForecastQueryDto {
     example: 24,
   })
   @Transform(({ value }) => toIntOrUndefined(value))
+  // Validate only when present; if omitted, service defaults are applied
   @ValidateIf(
     (o: WindForecastQueryDto) =>
       o.granularity === Granularity.Hourly && o.range !== undefined,
@@ -104,6 +107,7 @@ export class WindForecastQueryDto {
     example: 5,
   })
   @Transform(({ value }) => toIntOrUndefined(value))
+  // Validate only when present; if omitted, service defaults are applied
   @ValidateIf(
     (o: WindForecastQueryDto) =>
       o.granularity === Granularity.Daily && o.days !== undefined,

@@ -2,7 +2,10 @@ import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Raw, Repository } from 'typeorm';
 import { CreateLocationDto } from './dto/create-location.dto';
-import { WeatherService, WeatherSummary } from '../weather/services/weather.service';
+import {
+  WeatherService,
+  WeatherSummary,
+} from '../weather/services/weather.service';
 import { PaginationDto } from './dto/pagination.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import { Units } from '../weather/dto/wind-forecast.dto';
@@ -13,16 +16,16 @@ export class LocationsService {
   constructor(
     @InjectRepository(Locations)
     private readonly locationRepository: Repository<Locations>,
-    private readonly weatherService: WeatherService,
+    private readonly weatherService: WeatherService, // used to enrich favorites with minimal "current" wind
   ) {}
 
   async create(createLocationDto: CreateLocationDto, clientId: string) {
     const normalizedName = createLocationDto.name.trim().replace(/\s+/g, ' ');
     const lat = Number(createLocationDto.latitude);
     const lon = Number(createLocationDto.longitude);
-    const EPS = 0.0005;
+    const EPS = 0.0005; // ~55m tolerance for coordinate dupe detection
 
-    // App-level duplication prevention as before
+    // Prevent duplicates per client by name (case-insensitive) or near-identical coordinates
     const existingActive = await this.locationRepository.findOne({
       where: [
         { clientId, isActive: true, name: ILike(normalizedName) },
@@ -45,6 +48,7 @@ export class LocationsService {
       throw new HttpException('Location already exists', HttpStatus.CONFLICT);
     }
 
+    // Reactivate soft-deleted duplicates instead of creating a new row
     const existingInactive = await this.locationRepository.findOne({
       where: [
         { clientId, isActive: false, name: ILike(normalizedName) },
@@ -86,22 +90,27 @@ export class LocationsService {
     clientId: string,
     pagination: PaginationDto,
     units: Units = Units.Metric,
-  ): Promise<{ total: number; page: number; pageSize: number; items: Array<Locations & { weather: WeatherSummary }> }> {
+  ): Promise<{
+    total: number;
+    page: number;
+    pageSize: number;
+    items: Array<Locations & { weather: WeatherSummary }>;
+  }> {
     const [items, total] = await this.locationRepository.findAndCount({
       where: { isActive: true, clientId },
-      order: { updatedAt: 'DESC' },
+      order: { updatedAt: 'DESC' }, // show most recently updated first
       skip: (pagination.page - 1) * pagination.pageSize,
       take: pagination.pageSize,
     });
 
-    // Fetch minimal current weather summary using cached SWR
+    // Enrich with minimal, cached "current" wind summary per location
     const results = await Promise.all(
       items.map(async (location) => {
         const weather = await this.weatherService.getCurrentSummary(
           Number(location.latitude),
           Number(location.longitude),
           units,
-          clientId,
+          clientId, // optional per-client bucket for rate limiter
         );
         return { ...location, weather };
       }),
@@ -115,9 +124,16 @@ export class LocationsService {
     };
   }
 
-  async update(id: number, clientId: string, dto: UpdateLocationDto): Promise<Locations> {
-    const row = await this.locationRepository.findOne({ where: { id, clientId } });
-    if (!row) throw new HttpException('Location not found', HttpStatus.NOT_FOUND);
+  async update(
+    id: number,
+    clientId: string,
+    dto: UpdateLocationDto,
+  ): Promise<Locations> {
+    const row = await this.locationRepository.findOne({
+      where: { id, clientId },
+    });
+    if (!row)
+      throw new HttpException('Location not found', HttpStatus.NOT_FOUND);
 
     if (dto.name !== undefined) row.name = dto.name.trim().replace(/\s+/g, ' ');
     if (dto.latitude !== undefined) row.latitude = Number(dto.latitude);
@@ -128,14 +144,19 @@ export class LocationsService {
   }
 
   async removeOne(id: number, clientId: string): Promise<void> {
-    const row = await this.locationRepository.findOne({ where: { id, clientId, isActive: true } });
-    if (!row) throw new HttpException('Location not found', HttpStatus.NOT_FOUND);
-    row.isActive = false;
+    const row = await this.locationRepository.findOne({
+      where: { id, clientId, isActive: true },
+    });
+    if (!row)
+      throw new HttpException('Location not found', HttpStatus.NOT_FOUND);
+    row.isActive = false; // soft-delete
     await this.locationRepository.save(row);
   }
 
   async removeAll(clientId: string): Promise<void> {
-    const rows = await this.locationRepository.find({ where: { clientId, isActive: true } });
+    const rows = await this.locationRepository.find({
+      where: { clientId, isActive: true },
+    });
     if (!rows.length) {
       throw new HttpException('Location not found', HttpStatus.NOT_FOUND);
     }

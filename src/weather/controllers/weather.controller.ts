@@ -27,6 +27,7 @@ import { WindForecastResult } from '../types/forecast.types';
 export class WeatherController {
   constructor(private readonly weatherService: WeatherService) {}
 
+  // Path uses "lat,lon" to disambiguate and keep URL compact
   @Get(':lat,:lon/forecast')
   @ApiOperation({
     summary: 'Wind forecast',
@@ -71,27 +72,12 @@ export class WeatherController {
   @ApiResponse({
     status: 200,
     description: 'Forecast data retrieved successfully',
-    schema: {
-      example: {
-        units: 'metric',
-        granularity: 'hourly',
-        hourly: [
-          {
-            temperature: 22.5,
-            windSpeed: 5.2,
-            windGust: 7.1,
-            windDirectionDeg: 45,
-            windDirection: 'NE',
-            timestamp: 1723206000,
-          },
-        ],
-      },
-    },
   })
   @ApiResponse({
     status: 400,
     description: 'Invalid coordinates or upstream API error',
   })
+  // Transform + whitelist ensures DTO types are correct and extraneous params are rejected
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async getWindForecast(
     @Param() params: WindForecastParamsDto,

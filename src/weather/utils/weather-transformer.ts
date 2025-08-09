@@ -4,7 +4,7 @@ import {
 } from '../types/forecast.types';
 
 export class WeatherTransformer {
-  // 16-point compass
+  // Maps degrees to a 16-point compass. Keeps UI simple: 'N','NNE','NE',...
   getWindDirection(deg: number): string {
     if (deg == null || Number.isNaN(deg)) return 'N';
     const dirs = [
@@ -29,10 +29,11 @@ export class WeatherTransformer {
     return dirs[idx];
   }
 
+  // Aggregates 3-hourly points into daily summaries in UTC day buckets.
+  // Returns avg wind speed, predominant direction (mode) and max gust per day.
   calculateDailyAverages(
     points: WeatherForecastPoint[],
   ): WeatherDailySummary[] {
-    // Group by date (UTC)
     const groups = new Map<string, WeatherForecastPoint[]>();
     for (const p of points) {
       const date = new Date(p.timestamp * 1000).toISOString().slice(0, 10);
@@ -43,10 +44,10 @@ export class WeatherTransformer {
     const summaries: WeatherDailySummary[] = [];
     for (const [date, arr] of groups.entries()) {
       if (arr.length === 0) continue;
+
       const avgWindSpeed =
         arr.reduce((sum, x) => sum + x.windSpeed, 0) / arr.length;
 
-      // Determine predominant direction by mode
       const freq = new Map<string, number>();
       let predominantDirection = 'N';
       let maxCount = 0;
@@ -72,7 +73,6 @@ export class WeatherTransformer {
       });
     }
 
-    // Sort by date asc
     summaries.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     return summaries;
   }
