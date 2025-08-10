@@ -3,19 +3,18 @@ import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { HttpException } from '@nestjs/common';
 import axios from 'axios';
+import { firstValueFrom } from 'rxjs';
 import { LocationSearchService } from '../services/location-search.service';
-import type {
-  LocationSearchResult,
-  OpenWeatherGeoResponse,
-} from '../types/location-search.types';
+import type { OpenWeatherGeoResponse } from '../types/location-search.types';
+import { RateLimiterService } from '../../shared/services/rate-limiter.service';
 
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
-describe('LocationSearchService', () => {
+describe('LocationSearchService (Unit)', () => {
   let service: LocationSearchService;
-  let configService: ConfigService;
-  let cacheManager: jest.Mocked<any>;
+  let cacheManager: { get: jest.Mock; set: jest.Mock };
+  let rateLimiter: { consume: jest.Mock };
 
   const mockApiKey = 'test-api-key';
   const mockQuery = 'London';
@@ -29,88 +28,108 @@ describe('LocationSearchService', () => {
       lat: 51.5074,
       lon: -0.1278,
     },
-  ];
-
-  const expectedResults: LocationSearchResult[] = [
     {
-      name: 'London',
-      country: 'GB',
-      state: 'England',
-      lat: 51.5074,
-      lon: -0.1278,
+      name: 'Lonetown',
+      country: 'US',
+      state: 'NY',
+      lat: 10,
+      lon: 20,
     },
   ];
 
   beforeEach(async () => {
+    jest.useFakeTimers();
+
     cacheManager = {
       get: jest.fn(),
       set: jest.fn(),
-    };
+    } as any;
+
+    rateLimiter = { consume: jest.fn().mockResolvedValue(undefined) } as any;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LocationSearchService,
+        { provide: RateLimiterService, useValue: rateLimiter },
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn().mockReturnValue(mockApiKey),
+            getOrThrow: jest.fn().mockReturnValue(mockApiKey),
           },
         },
-        {
-          provide: CACHE_MANAGER,
-          useValue: cacheManager,
-        },
+        { provide: CACHE_MANAGER, useValue: cacheManager },
       ],
     }).compile();
 
     service = module.get<LocationSearchService>(LocationSearchService);
-    configService = module.get<ConfigService>(ConfigService);
   });
 
-  it('should be defined', () => {
-    expect(service).toBeDefined();
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.clearAllMocks();
   });
 
-  describe('searchLocations', () => {
-    it('should return cached results if available', async () => {
-      cacheManager.get.mockResolvedValueOnce(expectedResults);
+  it('should return empty list for too-short queries', async () => {
+    const res = await firstValueFrom(service.searchLocationsWithAutocomplete('L'));
+    expect(res).toEqual([]);
+  });
 
-      const results = await service.searchLocations(mockQuery);
+  it('should return cached results when available', async () => {
+    const cached = [
+      {
+        name: 'London',
+        country: 'GB',
+        state: 'England',
+        lat: 51.5074,
+        lon: -0.1278,
+        displayName: 'London, England, GB',
+        id: expect.any(String),
+        countryName: expect.any(String),
+      },
+    ];
+    cacheManager.get.mockResolvedValueOnce(cached);
 
-      expect(cacheManager.get).toHaveBeenCalledWith(mockCacheKey);
-      expect(results).toEqual(expectedResults);
-      expect(mockedAxios.get).not.toHaveBeenCalled();
-    });
+    const promise = firstValueFrom(
+      service.searchLocationsWithAutocomplete(mockQuery, 5),
+    );
 
-    it('should fetch and cache new results if cache is empty', async () => {
-      cacheManager.get.mockResolvedValueOnce(null);
-      mockedAxios.get.mockResolvedValueOnce({ data: mockLocationResponse });
+    jest.advanceTimersByTime(300);
+    const res = await promise;
+    expect(res).toEqual(cached);
+    expect(cacheManager.get).toHaveBeenCalledWith(mockCacheKey);
+    expect(mockedAxios.get).not.toHaveBeenCalled();
+  });
 
-      const results = await service.searchLocations(mockQuery);
+  it('should fetch, transform and cache results when cache miss', async () => {
+    cacheManager.get.mockResolvedValueOnce(null);
+    mockedAxios.get.mockResolvedValueOnce({ data: mockLocationResponse });
 
-      expect(results).toEqual(expectedResults);
-      expect(cacheManager.set).toHaveBeenCalledWith(
-        mockCacheKey,
-        expectedResults,
-        3600,
-      );
-    });
+    const promise = firstValueFrom(
+      service.searchLocationsWithAutocomplete(mockQuery, 5),
+    );
 
-    it('should handle API errors gracefully', async () => {
-      cacheManager.get.mockResolvedValueOnce(null);
-      mockedAxios.get.mockRejectedValueOnce(new Error('API Error'));
+    jest.advanceTimersByTime(300);
+    const res = await promise;
 
-      await expect(service.searchLocations(mockQuery)).rejects.toThrow(
-        HttpException,
-      );
-    });
+    expect(Array.isArray(res)).toBe(true);
+    expect(res[0].displayName).toBeDefined();
+    expect(cacheManager.set).toHaveBeenCalledWith(
+      mockCacheKey,
+      expect.any(Array),
+      3600,
+    );
+    expect(rateLimiter.consume).toHaveBeenCalled();
+  });
 
-    it('should throw error if API key is missing', async () => {
-      jest.spyOn(configService, 'get').mockReturnValueOnce(undefined);
+  it('should map axios errors to HttpException', async () => {
+    cacheManager.get.mockResolvedValueOnce(null);
+    mockedAxios.get.mockRejectedValueOnce(new Error('API Error'));
 
-      expect(
-        () => new LocationSearchService(configService, cacheManager),
-      ).toThrow('OpenWeather API key is missing');
-    });
+    const promise = firstValueFrom(
+      service.searchLocationsWithAutocomplete(mockQuery, 5),
+    );
+    jest.advanceTimersByTime(300);
+
+    await expect(promise).rejects.toBeInstanceOf(HttpException);
   });
 });

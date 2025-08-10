@@ -65,7 +65,8 @@ export class LocationSearchService {
     limit: number,
   ): Promise<LocationSearchResult[]> {
     const cacheKey = `location_search_${query.toLowerCase()}`;
-    const cached = await this.cacheManager.get<LocationSearchResult[]>(cacheKey);
+    const cached =
+      await this.cacheManager.get<LocationSearchResult[]>(cacheKey);
 
     if (cached) {
       return cached;
@@ -83,7 +84,11 @@ export class LocationSearchService {
   ): Promise<LocationSearchResult[]> {
     try {
       // Throttle before outbound request
-      await this.rateLimiter.consume('owm:requests', this.OWM_LIMIT_PER_HOUR, 3600);
+      await this.rateLimiter.consume(
+        'owm:requests',
+        this.OWM_LIMIT_PER_HOUR,
+        3600,
+      );
 
       const { data } = await axios.get<
         Array<{
@@ -131,8 +136,17 @@ export class LocationSearchService {
     }>,
   ): LocationSearchResult[] {
     return data.map((location) => {
-      const displayName = this.buildDisplayName(location.name, location.state, location.country);
-      const id = this.buildStableId(location.name, location.country, location.lat, location.lon);
+      const displayName = this.buildDisplayName(
+        location.name,
+        location.state,
+        location.country,
+      );
+      const id = this.buildStableId(
+        location.name,
+        location.country,
+        location.lat,
+        location.lon,
+      );
       const countryName = this.toCountryName(location.country);
 
       return {

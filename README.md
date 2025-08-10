@@ -3,16 +3,11 @@
 A modern, scalable weather service built with NestJS, focused on wind conditions and forecast, with favorites management and location search.
 
 ## Requirements Coverage At-a-Glance
-- Setup and installation instructions: Added (see “Setup & Installation” and “Running”).
-- Architecture overview (1–2 pages): Added (see “Architecture Overview”).
-- Technology choices and justifications: Added (see “Technology Choices & Why”).
-- Known limitations or assumptions: Added (see “Known Limitations & Assumptions”).
-- Future improvement suggestions: Added (see “Future Improvements”).
-
-What’s still missing (nice-to-have docs):
-- Full production runbook (alerts/SLIs/SLOs).
-- Detailed threat model and security hardening guide.
-- Ops examples for scaling horizontally and blue/green deploys.
+- Setup and installation instructions: see “Setup & Installation” and “Running”.
+- Architecture overview: see “Architecture Overview”.
+- Technology choices and justifications: “Technology Choices & Why”.
+- Known limitations or assumptions: see “Known Limitations & Assumptions”.
+- Future improvement suggestions: see “Future Improvements”.
 
 ---
 
@@ -68,13 +63,118 @@ What’s still missing (nice-to-have docs):
      ```
      Testing
      ```
-       yarn test
-       yarn test:cov
-       yarn test:e2e
+       # run all unit tests (in-band to avoid concurrency issues with timers)
+       npm run test
+
+       # watch mode
+       npm run test:watch
+
+       # coverage report
+       npm run test:cov
+
+       # run only location-search tests
+       npm run test:location-search
+
+       # e2e tests (if configured)
+       npm run test:e2e
     ```
 
 Swagger/OpenAPI
 - http://localhost:3000/api
+
+---
+
+## Deployment (Docker & Docker Compose)
+
+The easiest way to run this service (and its dependencies) is via Docker Compose.
+
+Prerequisites
+- Docker 24+
+- Docker Compose v2+
+- An OpenWeather API key
+
+Quickstart (Compose)
+1) Create your environment file
+   - Copy the example file and update values (ensure the API key variable name matches the code: OPENWEATHER_API_KEY):
+     
+       cp .env.docker.example .env
+       ##### IMPORTANT: edit .env and set OPENWEATHER_API_KEY=<your_api_key>
+       ##### If .env.docker.example contains WEATHER_API_KEY, rename it to OPENWEATHER_API_KEY
+
+2) Build and start
+
+       # Build the application image and start all services
+       docker compose up -d --build
+
+   - Services started:
+     - app: NestJS API at http://localhost:3000
+     - postgres: Postgres 16 at localhost:5432 (inside compose network: host=postgres)
+     - redis: Redis 7 at localhost:6379 (inside compose network: host=redis)
+
+3) Health and logs
+
+       docker compose ps
+       docker compose logs -f app
+       # Health endpoint
+       curl http://localhost:3000/health
+       # Swagger
+       open http://localhost:3000/api
+
+Environment variables
+- Core
+  - NODE_ENV=production|development (default: production in .env.docker.example)
+  - PORT=3000
+- OpenWeather
+  - OPENWEATHER_API_KEY=<your_api_key>
+- Postgres (TypeORM)
+  - DB_HOST=postgres (in Compose)
+  - DB_PORT=5432
+  - DB_NAME=app_db
+  - DB_USER=app_user
+  - DB_PASSWORD=<password>
+  - DB_SSL=false
+- Redis
+  - REDIS_HOST=redis (in Compose)
+  - REDIS_PORT=6379
+  - REDIS_PASSWORD= (optional)
+- Cache/Throttling
+  - CACHE_TTL_SECONDS=60
+
+Notes
+- The application code expects OPENWEATHER_API_KEY. If your .env template uses WEATHER_API_KEY, change it to OPENWEATHER_API_KEY.
+- docker-compose.yml references a Dockerfile at the repo root. If your file is named differently (e.g., .dockerfile), either rename it to Dockerfile or set services.app.build.dockerfile accordingly.
+
+Run database migrations in Docker
+- The TypeORM CLI in package.json expects built artifacts. Steps:
+
+       # Build once (outside or inside the container)
+       yarn build
+       # Run migrations inside the container
+       docker compose exec app npm run migrate:run
+       # (Optional) revert last migration
+       docker compose exec app npm run migrate:revert
+
+Manual Docker build/run (without Compose)
+
+       # Build image (uses Dockerfile in repo root)
+       docker build -t your-org/your-app:latest .
+       # Run with environment file
+       docker run --rm -p 3000:3000 --env-file .env \
+         --name weather-api your-org/your-app:latest
+
+Production deployment tips
+- Secrets: never commit .env; provide via a secret manager or CI/CD.
+- Postgres/Redis: use managed services where possible; set strong passwords and TLS where supported.
+- Health checks: /health is used in Compose; integrate with your orchestrator (systemd, ECS, Kubernetes, etc.).
+- Scaling: enable Redis for shared cache and rate limits across replicas; consider sticky sessions only if needed.
+- Observability: enable structured logs; ship to your log aggregator. Consider adding metrics/traces (see Future Improvements).
+- Resources: configure container memory/CPU limits and readiness probes.
+
+Troubleshooting (Docker)
+- Build fails: ensure Dockerfile path is correct and node_modules isn’t copied incorrectly (see .dockerignore).
+- App cannot reach DB/Redis: verify DB_HOST=postgres and REDIS_HOST=redis when using Compose.
+- 500 on startup: check that OPENWEATHER_API_KEY is set and valid.
+- Migrations fail: run yarn build before migrate:run; verify DB credentials and service health.
 
 ---
 
@@ -232,9 +332,31 @@ Location Search
 - DB connection timeout
     - Verify DB_HOST/PORT and that Postgres is running/reachable.
     - For remote DBs, ensure firewall and SSL settings match your env.
+    - For remote DBs, ensure firewall and SSL settings match your env.
 - Redis connection refused
     - Start Redis locally or set USE_REDIS=false to use in-memory cache.
 - 429 responses
     - Back off and retry later; the service enforces upstream-friendly quotas.
 - 400 on forecast
     - Check lat/lon values and that you only send days for daily or range for hourly (integers, correct ranges).
+
+
+## Test Coverage
+
+- Generate coverage report:
+  - npm run test:cov
+- Report output locations (generated by Jest):
+  - coverage/coverage-final.json (raw)
+  - coverage/lcov.info (LCOV)
+  - coverage/lcov-report/index.html (full HTML report)
+- View the HTML report locally:
+  - macOS: open coverage/lcov-report/index.html
+  - Linux (GUI): xdg-open coverage/lcov-report/index.html
+  - Windows: start coverage\lcov-report\index.html
+
+Optional badge (manual/static example; replace XX with your current %):
+- ![coverage](https://img.shields.io/badge/coverage-XX%25-brightgreen)
+
+CI/CD badge suggestions (future enhancement):
+- Codecov: upload coverage/lcov.info in CI, then add the Codecov badge to this README.
+- Coveralls: upload LCOV in CI, then add the Coveralls badge to this README.

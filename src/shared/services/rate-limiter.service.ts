@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
-import { HttpException, HttpStatus } from '@nestjs/common';
 import { RateLimitException } from '../exceptions/api.exception';
 
 /**
