@@ -36,7 +36,7 @@ export class LocationSearchQueryDto {
     required: false,
   })
   @IsOptional()
-  @Transform(({ value }) => parseInt(value))
+  @Transform(({ value }) => parseInt(String(value), 10))
   limit?: number = 5;
 }
 

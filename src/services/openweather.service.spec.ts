@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/unbound-method */
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -29,8 +30,8 @@ describe('OpenWeatherService (Unit)', () => {
               key === 'OPENWEATHER_API_KEY'
                 ? 'key'
                 : key === 'OPENWEATHER_API_URL'
-                ? 'https://api.openweathermap.org/data/2.5'
-                : undefined,
+                  ? 'https://api.openweathermap.org/data/2.5'
+                  : undefined,
           },
         },
         { provide: CACHE_MANAGER, useValue: cache },

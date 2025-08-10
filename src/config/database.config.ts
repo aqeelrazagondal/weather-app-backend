@@ -19,4 +19,3 @@ export const getDatabaseConfig = (
   },
   logging: configService.get('NODE_ENV') !== 'production',
 });
-

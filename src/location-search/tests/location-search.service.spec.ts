@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/unbound-method */
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -70,7 +71,9 @@ describe('LocationSearchService (Unit)', () => {
   });
 
   it('should return empty list for too-short queries', async () => {
-    const res = await firstValueFrom(service.searchLocationsWithAutocomplete('L'));
+    const res = await firstValueFrom(
+      service.searchLocationsWithAutocomplete('L'),
+    );
     expect(res).toEqual([]);
   });
 

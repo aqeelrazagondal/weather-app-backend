@@ -13,9 +13,18 @@ describe('HealthController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [HealthController],
       providers: [
-        { provide: HealthCheckService, useValue: { check: jest.fn().mockResolvedValue({ status: 'ok' }) } },
-        { provide: TypeOrmHealthIndicator, useValue: { pingCheck: jest.fn().mockResolvedValue({}) } },
-        { provide: HttpHealthIndicator, useValue: { pingCheck: jest.fn().mockResolvedValue({}) } },
+        {
+          provide: HealthCheckService,
+          useValue: { check: jest.fn().mockResolvedValue({ status: 'ok' }) },
+        },
+        {
+          provide: TypeOrmHealthIndicator,
+          useValue: { pingCheck: jest.fn().mockResolvedValue({}) },
+        },
+        {
+          provide: HttpHealthIndicator,
+          useValue: { pingCheck: jest.fn().mockResolvedValue({}) },
+        },
       ],
     }).compile();
 

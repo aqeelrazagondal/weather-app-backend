@@ -2,7 +2,10 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Observable } from 'rxjs';
 import { LocationSearchService } from '../services/location-search.service';
-import { LocationSearchQueryDto, LocationSearchResponseDto } from '../dto/location-search.dto';
+import {
+  LocationSearchQueryDto,
+  LocationSearchResponseDto,
+} from '../dto/location-search.dto';
 
 @ApiTags('location-search')
 @Controller('location-search')

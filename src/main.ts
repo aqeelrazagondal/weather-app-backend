@@ -37,7 +37,6 @@ async function bootstrap() {
     maxAge: 86400, // cache preflight response (in seconds)
   });
 
-
   const config = new DocumentBuilder()
     .setTitle('Weather API')
     .setDescription('Weather application API documentation')
@@ -67,4 +66,4 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ? Number(process.env.PORT) : 3000);
 }
-bootstrap();
+void bootstrap();

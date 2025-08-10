@@ -60,4 +60,3 @@ export interface WeatherApiResponse {
   data: OpenWeatherResponse | OpenWeatherForecastResponse;
   status: number;
 }
-

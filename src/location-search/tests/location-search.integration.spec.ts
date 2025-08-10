@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument */
 import { Test, TestingModule } from '@nestjs/testing';
 import { of } from 'rxjs';
 import { LocationSearchController } from '../controllers/location-search.controller';
@@ -24,31 +25,45 @@ describe('LocationSearchController (Unit)', () => {
 
   beforeEach(async () => {
     service = {
-      searchLocationsWithAutocomplete: jest.fn().mockReturnValue(of(mockResults)),
+      searchLocationsWithAutocomplete: jest
+        .fn()
+        .mockReturnValue(of(mockResults)),
     } as any;
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [LocationSearchController],
-      providers: [
-        { provide: LocationSearchService, useValue: service },
-      ],
+      providers: [{ provide: LocationSearchService, useValue: service }],
     }).compile();
 
     controller = module.get<LocationSearchController>(LocationSearchController);
   });
 
   it('should delegate to service with defaults', (done) => {
-    controller.search({ query: 'Lond', limit: undefined, autocomplete: undefined } as any).subscribe((res) => {
-      expect(res).toEqual(mockResults);
-      expect(service.searchLocationsWithAutocomplete).toHaveBeenCalledWith('Lond', 5);
-      done();
-    });
+    controller
+      .search({
+        query: 'Lond',
+        limit: undefined,
+        autocomplete: undefined,
+      } as any)
+      .subscribe((res) => {
+        expect(res).toEqual(mockResults);
+        expect(service.searchLocationsWithAutocomplete).toHaveBeenCalledWith(
+          'Lond',
+          5,
+        );
+        done();
+      });
   });
 
   it('should pass custom limit', (done) => {
-    controller.search({ query: 'Lon', limit: 10, autocomplete: true } as any).subscribe(() => {
-      expect(service.searchLocationsWithAutocomplete).toHaveBeenCalledWith('Lon', 10);
-      done();
-    });
+    controller
+      .search({ query: 'Lon', limit: 10, autocomplete: true } as any)
+      .subscribe(() => {
+        expect(service.searchLocationsWithAutocomplete).toHaveBeenCalledWith(
+          'Lon',
+          10,
+        );
+        done();
+      });
   });
 });

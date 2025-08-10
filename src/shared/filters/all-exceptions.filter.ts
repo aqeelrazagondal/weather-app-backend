@@ -12,6 +12,14 @@ import { Logger } from '@nestjs/common';
 import { ApiException } from '../exceptions/api.exception';
 import type { ErrorResponse } from '../types/error.types';
 
+/*
+  NOTE: This centralized exception filter deals with unknown/third-party
+  error shapes (Axios, class-validator, raw objects). To keep the code
+  readable and focused on HTTP response mapping, we relax a few
+  @typescript-eslint "no-unsafe-*" rules within this file.
+*/
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
+
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);

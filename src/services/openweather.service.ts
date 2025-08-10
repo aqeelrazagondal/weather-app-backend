@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import axios from 'axios';
-import type { AxiosError } from 'axios';
 import { RateLimiterService } from '../shared/services/rate-limiter.service';
 
 interface OpenWeatherResponse {
@@ -68,7 +67,7 @@ export class OpenWeatherService {
       };
       await this.cacheManager.set(cacheKey, weatherData, 1800);
       return weatherData;
-    } catch (e) {
+    } catch {
       throw new HttpException(
         'Failed to fetch weather data',
         HttpStatus.BAD_REQUEST,

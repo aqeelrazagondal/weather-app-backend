@@ -12,11 +12,11 @@ import { InflightRequestsService } from '../shared/utils/inflight-requests.servi
   imports: [ConfigModule, CacheModule.register()],
   controllers: [WeatherController],
   providers: [
-    WeatherService,           // core weather business logic (SWR, rate limiting)
-    RateLimiterService,       // Redis-first rate limiter with fallback
-    CacheSwrService,          // Stale-While-Revalidate helper
-    InflightRequestsService,  // collapses concurrent identical requests
+    WeatherService, // core weather business logic (SWR, rate limiting)
+    RateLimiterService, // Redis-first rate limiter with fallback
+    CacheSwrService, // Stale-While-Revalidate helper
+    InflightRequestsService, // collapses concurrent identical requests
   ],
-  exports: [WeatherService],   // exported for other modules (e.g., Locations)
+  exports: [WeatherService], // exported for other modules (e.g., Locations)
 })
 export class WeatherModule {}

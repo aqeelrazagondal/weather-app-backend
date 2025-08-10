@@ -112,7 +112,7 @@ export class LocationSearchService {
       });
 
       return this.transformLocations(data);
-    } catch (e) {
+    } catch {
       // Preserve your existing error mapping
       throw new HttpException(
         'Failed to fetch location data',
@@ -181,6 +181,7 @@ export class LocationSearchService {
     withScores.sort((a, b) => b.score - a.score);
 
     // strip score before returning
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     return withScores.map(({ score, ...rest }) => rest as LocationSearchResult);
   }
 
