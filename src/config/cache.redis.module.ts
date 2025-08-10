@@ -1,4 +1,3 @@
-// src/config/cache.redis.module.ts
 import { CacheModule } from '@nestjs/cache-manager';
 import { Module, Logger } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';

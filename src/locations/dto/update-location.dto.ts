@@ -1,4 +1,3 @@
-// src/locations/dto/update-location.dto.ts
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
